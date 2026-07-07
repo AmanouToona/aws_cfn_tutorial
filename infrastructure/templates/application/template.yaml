@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Minimal backend stack for Hello API
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+  Project:
+    Type: String
+    Default: aws-cfn-tutorial
+
+Resources:
+  HelloTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${Project}-hello-${EnvironmentName}"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  HelloFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-hello-function-role-${EnvironmentName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  HelloFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${Project}-hello-function-${EnvironmentName}"
+      Handler: index.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt HelloFunctionRole.Arn
+      Timeout: 10
+      Code:
+        ZipFile: |
+          import json
+
+          def lambda_handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json"},
+                  "body": json.dumps({"message": "hello"})
+              }
+
+  HelloApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${Project}-hello-api-${EnvironmentName}"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  HelloApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref HelloApi
+      ParentId: !GetAtt HelloApi.RootResourceId
+      PathPart: hello
+
+  HelloApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResourceId: !Ref HelloApiResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HelloFunction.Arn}/invocations
+
+  HelloApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref HelloFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HelloApi}/*/GET/hello
+
+  HelloApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - HelloApiMethod
+    Properties:
+      RestApiId: !Ref HelloApi
+      StageName: prod
+
+Outputs:
+  HelloApiUrl:
+    Description: URL of the Hello API
+    Value: !Sub "https://${HelloApi}.execute-api.${AWS::Region}.amazonaws.com/prod/hello"
+  HelloFunctionArn:
+    Value: !GetAtt HelloFunction.Arn
+  HelloTableName:
+    Value: !Ref HelloTable

@@ -112,26 +112,15 @@ aws cloudformation validate-template \
 
 - エラーなく成功すること
 
-### Step 5. SAM ビルドを実行する
+### Step 5. application スタックをデプロイする
 
 ```bash
-sam build --template-file infrastructure/templates/application/template.yaml
-```
-
-確認ポイント:
-
-- ビルドが成功すること
-
-### Step 6. application スタックをデプロイする
-
-```bash
-sam deploy \
+aws cloudformation deploy \
   --region "$AWS_REGION" \
   --profile "$AWS_PROFILE_NAME" \
   --stack-name "$APP_STACK" \
   --template-file infrastructure/templates/application/template.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --resolve-s3 \
   --parameter-overrides EnvironmentName="$ENV" Project="$PROJECT"
 ```
 
@@ -139,7 +128,7 @@ sam deploy \
 
 - デプロイが成功すること
 
-### Step 7. API URL を取得する
+### Step 6. API URL を取得する
 
 ```bash
 aws cloudformation describe-stacks \
@@ -165,23 +154,9 @@ curl "<ここに API の URL>/hello"
 - `200 OK`
 - 例: `{"message":"hello"}`
 
-## 6. Git での区切り（推奨）
+## 8. よくある失敗と対処
 
-学習しやすくするため、以下の単位でコミットするのがおすすめです。
-
-1. Lambda の最小コード追加
-2. application テンプレート追加
-3. SAM build / deploy 手順追加
-
-コミット前チェック:
-
-```bash
-git status
-```
-
-## 7. よくある失敗と対処
-
-### 7.1 Lambda の CodeUri パス間違い
+### 8.1 Lambda の CodeUri パス間違い
 
 症状:
 
@@ -191,7 +166,7 @@ git status
 
 - `CodeUri` が `backend/functions/hello/` を正しく指しているか確認する
 
-### 7.2 API のパス設定ミス
+### 8.2 API のパス設定ミス
 
 症状:
 
@@ -201,7 +176,7 @@ git status
 
 - テンプレートのイベント定義で `Path: /hello` と `Method: get` を確認する
 
-### 7.3 deploy 時の権限不足
+### 8.3 deploy 時の権限不足
 
 症状:
 
@@ -211,7 +186,7 @@ git status
 
 - Phase 1 で作成した実行ロールや deploy 権限を見直す
 
-### 7.4 Outputs が足りない
+### 8.4 Outputs が足りない
 
 症状:
 
@@ -221,7 +196,7 @@ git status
 
 - API エンドポイント URL を Outputs に追加する
 
-## 8. 完了条件（Definition of Done）
+## 9. 完了条件（Definition of Done）
 
 以下すべてを満たしたら Phase 2 完了です。
 
@@ -230,7 +205,7 @@ git status
 - API URL を CloudFormation Outputs から取得できる
 - Git で変更が追跡できている
 
-## 9. 次に進む前の確認
+## 10. 次に進む前の確認
 
 ```bash
 aws cloudformation describe-stacks \
