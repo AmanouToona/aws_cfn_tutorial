@@ -39,6 +39,10 @@
 3. CloudFormation 実行用の IAM ロールを作成する
 4. これらを CloudFormation で管理する
 
+詳細手順:
+
+- `docs/02_bootstrap-stack.md` を参照
+
 目的:
 
 - 後続のデプロイに必要な土台を作る

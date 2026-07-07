@@ -1,0 +1,64 @@
+# bootstrap.yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation Bootstrap Stack - Creates S3 bucket and Execution Role
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+  Project:
+    Type: String
+    Default: aws-cfn-tutorial
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Project}-artifact-${EnvironmentName}-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Project}-frontend-${EnvironmentName}-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+
+  CfnExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CloudFormationExecutionRole-Tutorial
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: S3AccessToArtifactBucket
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactBucket}"
+                  - !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+
+Outputs:
+  ArtifactBucketName:
+    Description: S3 bucket name for deployment artifacts
+    Value: !Ref ArtifactBucket
+  FrontendBucketName:
+    Description: S3 bucket name for frontend assets
+    Value: !Ref FrontendBucket
+  CfnExecutionRoleArn:
+    Description: ARN of the CloudFormation Execution Role
+    Value: !GetAtt CfnExecutionRole.Arn
