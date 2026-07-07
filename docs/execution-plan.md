@@ -41,7 +41,7 @@
 
 詳細手順:
 
-- `docs/02_bootstrap-stack.md` を参照
+- `docs/01_bootstrap-stack.md` を参照
 
 目的:
 
@@ -53,6 +53,10 @@
 2. Lambda 関数を作る
 3. DynamoDB テーブルを作る
 4. 1 つの公開 API を動かす
+
+詳細手順:
+
+- `docs/02_minimal-backend.md` を参照
 
 最初の目標:
 

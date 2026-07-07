@@ -8,6 +8,12 @@ Parameters:
   Project:
     Type: String
     Default: aws-cfn-tutorial
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket that stores Lambda deployment zip
+  LambdaCodeS3Key:
+    Type: String
+    Description: S3 key for Lambda deployment zip
 
 Resources:
   HelloTable:
@@ -40,20 +46,13 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "${Project}-hello-function-${EnvironmentName}"
-      Handler: index.lambda_handler
+      Handler: app.lambda_handler
       Runtime: python3.12
       Role: !GetAtt HelloFunctionRole.Arn
       Timeout: 10
       Code:
-        ZipFile: |
-          import json
-
-          def lambda_handler(event, context):
-              return {
-                  "statusCode": 200,
-                  "headers": {"Content-Type": "application/json"},
-                  "body": json.dumps({"message": "hello"})
-              }
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
 
   HelloApi:
     Type: AWS::ApiGateway::RestApi
