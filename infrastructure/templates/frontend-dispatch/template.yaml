@@ -10,6 +10,9 @@ Parameters:
     Default: aws-cfn-tutorial
   FrontendBucketName:
     Type: String
+  FrontendWebAclArn:
+    Type: String
+    Default: ""
 
 Resources:
   FrontendDistribution:
@@ -36,6 +39,7 @@ Resources:
             Cookies:
               Forward: none
         DefaultRootObject: index.html
+        WebACLId: !Ref FrontendWebAclArn
   FrontendOAC:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:

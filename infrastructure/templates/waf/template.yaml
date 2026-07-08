@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: WAF stack for CloudFront protection
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+  Project:
+    Type: String
+    Default: aws-cfn-tutorial
+
+Resources:
+  FrontendWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${Project}-frontend-webacl-${EnvironmentName}"
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${Project}-frontend-webacl-${EnvironmentName}"
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: AWSManagedCommonRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: awsManagedCommon
+            SampledRequestsEnabled: true
+
+        - Name: BlockWafTestPath
+          Priority: 2
+          Action:
+            Block: {}
+          Statement:
+            ByteMatchStatement:
+              FieldToMatch:
+                UriPath: {}
+              PositionalConstraint: EXACTLY
+              SearchString: /waf-test-block
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: blockWafTestPath
+            SampledRequestsEnabled: true
+
+Outputs:
+  FrontendWebAclArn:
+    Description: ARN of Web ACL for CloudFront
+    Value: !GetAtt FrontendWebAcl.Arn
