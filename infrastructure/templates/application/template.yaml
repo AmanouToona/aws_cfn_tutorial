@@ -14,6 +14,12 @@ Parameters:
   LambdaCodeS3Key:
     Type: String
     Description: S3 key for Lambda deployment zip
+  FrontendCallbackUrl:
+    Type: String
+    Description: Redirect URL for Cognito Hosted UI callback
+  FrontendLogoutUrl:
+    Type: String
+    Description: Redirect URL after Cognito logout
 
 Resources:
   HelloTable:
@@ -69,6 +75,13 @@ Resources:
       ParentId: !GetAtt HelloApi.RootResourceId
       PathPart: hello
 
+  SecretApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref HelloApi
+      ParentId: !GetAtt HelloApi.RootResourceId
+      PathPart: secret
+
   HelloApiMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -81,6 +94,53 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HelloFunction.Arn}/invocations
 
+  HelloApiCognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub "${Project}-hello-cognito-authorizer-${EnvironmentName}"
+      RestApiId: !Ref HelloApi
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !GetAtt CognitoUserPool.Arn
+
+  SecretApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResourceId: !Ref SecretApiResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref HelloApiCognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HelloFunction.Arn}/invocations
+
+  SecretApiOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResourceId: !Ref SecretApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Authorization,Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
   HelloApiPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -89,19 +149,75 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HelloApi}/*/GET/hello
 
+  SecretApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref HelloFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HelloApi}/*/GET/secret
+
   HelloApiDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
       - HelloApiMethod
+      - SecretApiMethod
+      - SecretApiOptionsMethod
     Properties:
       RestApiId: !Ref HelloApi
       StageName: prod
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${Project}-cognito-userpool-${EnvironmentName}"
+      AutoVerifiedAttributes:
+        - email
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${Project}-cognito-userpool-client-${EnvironmentName}"
+      UserPoolId: !Ref CognitoUserPool
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs:
+        - !Ref FrontendCallbackUrl
+      LogoutURLs:
+        - !Ref FrontendLogoutUrl
+      SupportedIdentityProviders:
+        - COGNITO
+      GenerateSecret: false
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "auth-${EnvironmentName}-${AWS::AccountId}-${AWS::Region}"
+      UserPoolId: !Ref CognitoUserPool
 
 Outputs:
   HelloApiUrl:
     Description: URL of the Hello API
     Value: !Sub "https://${HelloApi}.execute-api.${AWS::Region}.amazonaws.com/prod/hello"
+  SecretApiUrl:
+    Description: URL of the protected Secret API
+    Value: !Sub "https://${HelloApi}.execute-api.${AWS::Region}.amazonaws.com/prod/secret"
   HelloFunctionArn:
     Value: !GetAtt HelloFunction.Arn
   HelloTableName:
     Value: !Ref HelloTable
+  UserPoolId:
+    Value: !Ref CognitoUserPool
+  UserPoolClientId:
+    Value: !Ref CognitoUserPoolClient
+  CognitoDomain:
+    Value: !Ref CognitoUserPoolDomain
+  CognitoIssuer:
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}"
+  ApiBaseUrl:
+    Value: !Sub "https://${HelloApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
