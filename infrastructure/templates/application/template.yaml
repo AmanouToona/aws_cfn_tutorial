@@ -131,7 +131,7 @@ Resources:
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Authorization,Content-Type'"
+              method.response.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
               method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
               method.response.header.Access-Control-Allow-Origin: "'*'"
       MethodResponses:
@@ -140,6 +140,96 @@ Resources:
             method.response.header.Access-Control-Allow-Headers: true
             method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
+
+  HelloApiUnauthorizedGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: UNAUTHORIZED
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiAccessDeniedGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: ACCESS_DENIED
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiDefault4xxGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: DEFAULT_4XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiDefault5xxGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: DEFAULT_5XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiMissingAuthTokenGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: MISSING_AUTHENTICATION_TOKEN
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiExpiredTokenGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: EXPIRED_TOKEN
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiInvalidSignatureGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: INVALID_SIGNATURE
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiAuthorizerFailureGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: AUTHORIZER_FAILURE
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  HelloApiAuthorizerConfigErrorGatewayResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref HelloApi
+      ResponseType: AUTHORIZER_CONFIGURATION_ERROR
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Authorization,Content-Type,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
 
   HelloApiPermission:
     Type: AWS::Lambda::Permission
@@ -166,6 +256,7 @@ Resources:
     Properties:
       RestApiId: !Ref HelloApi
       StageName: prod
+      Description: !Sub "deployment-${Project}-${EnvironmentName}-v5"
 
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
@@ -182,6 +273,7 @@ Resources:
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows:
         - code
+        - implicit
       AllowedOAuthScopes:
         - openid
         - email
@@ -193,6 +285,9 @@ Resources:
       SupportedIdentityProviders:
         - COGNITO
       GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
 
   CognitoUserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
@@ -221,3 +316,5 @@ Outputs:
     Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}"
   ApiBaseUrl:
     Value: !Sub "https://${HelloApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  ApiGatewayDomainName:
+    Value: !Sub "${HelloApi}.execute-api.${AWS::Region}.amazonaws.com"

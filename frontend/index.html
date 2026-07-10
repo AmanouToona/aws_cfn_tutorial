@@ -3,10 +3,586 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AWS CFN Tutorial</title>
+    <title>AWS CFN Tutorial - Phase 5</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #f7fafc;
+        color: #1f2937;
+      }
+
+      .container {
+        max-width: 860px;
+        margin: 0 auto;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 20px;
+      }
+
+      h1 {
+        margin-top: 0;
+        font-size: 1.5rem;
+      }
+
+      .buttons {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin: 16px 0;
+      }
+
+      button {
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        color: #0f172a;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 0.95rem;
+        cursor: pointer;
+      }
+
+      button.primary {
+        background: #0369a1;
+        border-color: #0369a1;
+        color: #ffffff;
+      }
+
+      pre {
+        margin: 0;
+        padding: 12px;
+        border-radius: 8px;
+        background: #0b1020;
+        color: #d1fae5;
+        overflow: auto;
+      }
+
+      .note {
+        color: #334155;
+      }
+
+      .warn {
+        color: #991b1b;
+      }
+    </style>
   </head>
   <body>
-    <h1>Phase 3 Frontend Ready</h1>
-    <p>S3 + CloudFront 配信の確認ページです。</p>
+    <main class="container">
+      <h1>Phase 5 Cognito Login Test</h1>
+      <p class="note">
+        Hosted UI (Authorization Code + PKCE) でログインし、認証付き
+        <code>/secret</code>
+        API を呼ぶ最小確認ページです。
+      </p>
+
+      <p id="status">Status: initializing...</p>
+      <div class="buttons">
+        <button id="loginButton" class="primary">Login with Cognito</button>
+        <button id="loginFallbackButton">Login (Fallback)</button>
+        <button id="callSecretButton">Call /secret</button>
+        <button id="diagnosticsButton">Run Diagnostics</button>
+        <button id="resetButton">Hard Reset Session</button>
+        <button id="logoutButton">Logout</button>
+      </div>
+
+      <p class="note">Response</p>
+      <pre id="result">(no response)</pre>
+
+      <p class="warn">CONFIG は Step 6 の Output 値で更新してください。</p>
+    </main>
+
+    <script>
+      const CONFIG = {
+        region: "ap-northeast-1",
+        clientId: "4a0sujm417p8ufmgcodici1elh",
+        cognitoDomainPrefix: "auth-dev-613977565498-ap-northeast-1",
+        secretApiUrl: "/prod/secret",
+      };
+
+      const REDIRECT_URI = window.location.origin + window.location.pathname;
+      const PKCE_STORAGE_KEY = "pkce_verifier";
+      const ACCESS_TOKEN_STORAGE_KEY = "auth_access_token";
+      const ID_TOKEN_STORAGE_KEY = "auth_id_token";
+      let accessToken = sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+      let idToken = sessionStorage.getItem(ID_TOKEN_STORAGE_KEY);
+
+      const statusEl = document.getElementById("status");
+      const resultEl = document.getElementById("result");
+      const loginButton = document.getElementById("loginButton");
+      const loginFallbackButton = document.getElementById(
+        "loginFallbackButton",
+      );
+      const callSecretButton = document.getElementById("callSecretButton");
+      const diagnosticsButton = document.getElementById("diagnosticsButton");
+      const resetButton = document.getElementById("resetButton");
+      const logoutButton = document.getElementById("logoutButton");
+
+      function setStatus(message) {
+        statusEl.textContent = "Status: " + message;
+      }
+
+      function setResult(value) {
+        resultEl.textContent =
+          typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      }
+
+      function errorToObject(error) {
+        return {
+          name: error?.name || "Error",
+          message: error?.message || String(error),
+          stack: error?.stack || null,
+        };
+      }
+
+      function resolveSecretApiUrl() {
+        return new URL(CONFIG.secretApiUrl, window.location.origin).toString();
+      }
+
+      function base64UrlEncode(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        for (const b of bytes) binary += String.fromCharCode(b);
+        return btoa(binary)
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+      }
+
+      function createRandomString(length) {
+        const chars =
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+        const random = crypto.getRandomValues(new Uint8Array(length));
+        return Array.from(random, (v) => chars[v % chars.length]).join("");
+      }
+
+      async function sha256(text) {
+        const data = new TextEncoder().encode(text);
+        return crypto.subtle.digest("SHA-256", data);
+      }
+
+      function getHostedUiBase() {
+        return (
+          "https://" +
+          CONFIG.cognitoDomainPrefix +
+          ".auth." +
+          CONFIG.region +
+          ".amazoncognito.com"
+        );
+      }
+
+      async function startLogin(responseType = "code") {
+        if (
+          CONFIG.clientId.startsWith("REPLACE_") ||
+          CONFIG.cognitoDomainPrefix.startsWith("REPLACE_")
+        ) {
+          setStatus("config not set");
+          setResult(
+            "CONFIG.clientId / CONFIG.cognitoDomainPrefix を更新してください",
+          );
+          return;
+        }
+
+        const loginUrl = new URL(getHostedUiBase() + "/login");
+        sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+        sessionStorage.removeItem(ID_TOKEN_STORAGE_KEY);
+        accessToken = null;
+        idToken = null;
+        loginUrl.searchParams.set("client_id", CONFIG.clientId);
+        loginUrl.searchParams.set("response_type", responseType);
+        loginUrl.searchParams.set("scope", "openid email profile");
+        loginUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+
+        if (responseType === "code") {
+          const codeVerifier = createRandomString(64);
+          const challenge = base64UrlEncode(await sha256(codeVerifier));
+          sessionStorage.setItem(PKCE_STORAGE_KEY, codeVerifier);
+          loginUrl.searchParams.set("code_challenge_method", "S256");
+          loginUrl.searchParams.set("code_challenge", challenge);
+        }
+
+        window.location.assign(loginUrl.toString());
+      }
+
+      async function exchangeCodeForToken(code) {
+        const verifier = sessionStorage.getItem(PKCE_STORAGE_KEY);
+        if (!verifier) {
+          throw new Error(
+            "code_verifier が見つかりません。もう一度 Login を実行してください。",
+          );
+        }
+
+        const body = new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: CONFIG.clientId,
+          code,
+          redirect_uri: REDIRECT_URI,
+          code_verifier: verifier,
+        });
+
+        const response = await fetch(getHostedUiBase() + "/oauth2/token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body,
+        });
+
+        const tokenJson = await response.json();
+        if (!response.ok) {
+          throw new Error(
+            "token exchange failed: " + JSON.stringify(tokenJson),
+          );
+        }
+
+        accessToken = tokenJson.access_token || null;
+        idToken = tokenJson.id_token || null;
+        if (accessToken) {
+          sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
+        }
+        if (idToken) {
+          sessionStorage.setItem(ID_TOKEN_STORAGE_KEY, idToken);
+        }
+        sessionStorage.removeItem(PKCE_STORAGE_KEY);
+
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete("code");
+        cleanUrl.searchParams.delete("state");
+        window.history.replaceState({}, document.title, cleanUrl.toString());
+
+        return tokenJson;
+      }
+
+      async function callSecretApi() {
+        if (!CONFIG.secretApiUrl) {
+          setStatus("config not set");
+          setResult("CONFIG.secretApiUrl を更新してください");
+          return;
+        }
+
+        const secretApiUrl = resolveSecretApiUrl();
+
+        async function requestWithToken(token, tokenType) {
+          const headers = {};
+          if (token) {
+            headers.Authorization = "Bearer " + token;
+          }
+          try {
+            const response = await fetch(secretApiUrl, {
+              method: "GET",
+              cache: "no-store",
+              headers,
+            });
+            return { response, tokenType, networkError: null };
+          } catch (error) {
+            return {
+              response: null,
+              tokenType,
+              networkError: errorToObject(error),
+            };
+          }
+        }
+
+        function parseJwtPayload(token) {
+          if (!token || token.split(".").length < 2) return null;
+          try {
+            const base64 = token
+              .split(".")[1]
+              .replace(/-/g, "+")
+              .replace(/_/g, "/");
+            const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+            const json = atob(padded);
+            return JSON.parse(json);
+          } catch {
+            return null;
+          }
+        }
+
+        function isExpired(token) {
+          const payload = parseJwtPayload(token);
+          if (!payload || !payload.exp) return false;
+          const now = Math.floor(Date.now() / 1000);
+          return payload.exp <= now + 30;
+        }
+
+        const tokenCandidates = [];
+        if (accessToken && !isExpired(accessToken) && accessToken !== idToken) {
+          tokenCandidates.push([accessToken, "access_token"]);
+        }
+        if (idToken && !isExpired(idToken)) {
+          tokenCandidates.push([idToken, "id_token"]);
+        }
+        if (accessToken && !isExpired(accessToken) && accessToken === idToken) {
+          tokenCandidates.push([accessToken, "access_token"]);
+        }
+        if (idToken && isExpired(idToken)) {
+          tokenCandidates.push([idToken, "id_token(expired)"]);
+        }
+        if (accessToken && isExpired(accessToken) && accessToken !== idToken) {
+          tokenCandidates.push([accessToken, "access_token(expired)"]);
+        }
+        if (tokenCandidates.length === 0) {
+          tokenCandidates.push([null, "none"]);
+        }
+
+        let result = await requestWithToken(
+          tokenCandidates[0][0],
+          tokenCandidates[0][1],
+        );
+
+        if (result.networkError && tokenCandidates.length > 1) {
+          result = await requestWithToken(
+            tokenCandidates[1][0],
+            tokenCandidates[1][1],
+          );
+        }
+
+        if (
+          result.response &&
+          result.response.status === 401 &&
+          tokenCandidates.length > 1
+        ) {
+          result = await requestWithToken(
+            tokenCandidates[1][0],
+            tokenCandidates[1][1],
+          );
+        }
+
+        if (result.networkError) {
+          setResult({
+            status: "network_error",
+            token_used: result.tokenType,
+            secretApiUrl,
+            pageOrigin: window.location.origin,
+            has_id_token: Boolean(idToken),
+            has_access_token: Boolean(accessToken),
+            error: result.networkError,
+            hint: "authorization preflight の失敗の可能性があります。application 再デプロイ後に refresh_frontend_phase5.sh を再実行してください。",
+          });
+          return;
+        }
+
+        const response = result.response;
+        let bodyText;
+        try {
+          bodyText = await response.text();
+        } catch (e) {
+          bodyText = "(body read failed)";
+        }
+
+        setResult({
+          status: response.status,
+          ok: response.ok,
+          token_used: result.tokenType,
+          body: bodyText,
+        });
+      }
+
+      async function runDiagnostics() {
+        const secretApiUrl = resolveSecretApiUrl();
+        const diagnostics = {
+          pageOrigin: window.location.origin,
+          secretApiUrl,
+          has_id_token: Boolean(idToken),
+          has_access_token: Boolean(accessToken),
+        };
+
+        try {
+          const preflight = await fetch(secretApiUrl, {
+            method: "OPTIONS",
+            mode: "cors",
+            cache: "no-store",
+            headers: {
+              "Access-Control-Request-Method": "GET",
+              "Access-Control-Request-Headers": "authorization,content-type",
+            },
+          });
+          diagnostics.preflight = {
+            status: preflight.status,
+            allow_origin: preflight.headers.get("access-control-allow-origin"),
+            allow_headers: preflight.headers.get(
+              "access-control-allow-headers",
+            ),
+            allow_methods: preflight.headers.get(
+              "access-control-allow-methods",
+            ),
+          };
+        } catch (error) {
+          diagnostics.preflight = {
+            status: "network_error",
+            error: errorToObject(error),
+          };
+        }
+
+        try {
+          const noAuth = await fetch(secretApiUrl, {
+            method: "GET",
+            mode: "cors",
+            cache: "no-store",
+          });
+          diagnostics.no_auth = {
+            status: noAuth.status,
+            allow_origin: noAuth.headers.get("access-control-allow-origin"),
+          };
+        } catch (error) {
+          diagnostics.no_auth = {
+            status: "network_error",
+            error: errorToObject(error),
+          };
+        }
+
+        diagnostics.with_token = [];
+        const diagnosticTokens = [];
+        if (accessToken) diagnosticTokens.push([accessToken, "access_token"]);
+        if (idToken && idToken !== accessToken) {
+          diagnosticTokens.push([idToken, "id_token"]);
+        }
+        for (const [token, tokenType] of diagnosticTokens) {
+          try {
+            const authRes = await fetch(secretApiUrl, {
+              method: "GET",
+              mode: "cors",
+              cache: "no-store",
+              headers: {
+                Authorization: "Bearer " + token,
+              },
+            });
+            diagnostics.with_token.push({
+              status: authRes.status,
+              token_used: tokenType,
+              allow_origin: authRes.headers.get("access-control-allow-origin"),
+            });
+          } catch (error) {
+            diagnostics.with_token.push({
+              status: "network_error",
+              token_used: tokenType,
+              error: errorToObject(error),
+            });
+          }
+        }
+
+        setStatus("diagnostics complete");
+        setResult(diagnostics);
+      }
+
+      function logout() {
+        accessToken = null;
+        idToken = null;
+        sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+        sessionStorage.removeItem(ID_TOKEN_STORAGE_KEY);
+        const logoutUrl = new URL(getHostedUiBase() + "/logout");
+        logoutUrl.searchParams.set("client_id", CONFIG.clientId);
+        logoutUrl.searchParams.set("logout_uri", REDIRECT_URI);
+        window.location.assign(logoutUrl.toString());
+      }
+
+      function hardResetSession() {
+        accessToken = null;
+        idToken = null;
+        sessionStorage.removeItem(PKCE_STORAGE_KEY);
+        sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+        sessionStorage.removeItem(ID_TOKEN_STORAGE_KEY);
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete("code");
+        cleanUrl.searchParams.delete("state");
+        window.history.replaceState({}, document.title, REDIRECT_URI);
+        setStatus("session reset");
+        setResult(
+          "sessionStorage をクリアしました。Login with Cognito を実行してください。",
+        );
+      }
+
+      async function initialize() {
+        try {
+          if (idToken || accessToken) {
+            setStatus("authenticated (cached token)");
+          } else {
+            setStatus("ready");
+          }
+          const url = new URL(window.location.href);
+          const code = url.searchParams.get("code");
+          const hashParams = new URLSearchParams(
+            window.location.hash.replace(/^#/, ""),
+          );
+          const hashAccessToken = hashParams.get("access_token");
+          const hashIdToken = hashParams.get("id_token");
+
+          if (hashAccessToken || hashIdToken) {
+            accessToken = hashAccessToken || null;
+            idToken = hashIdToken || null;
+            if (accessToken) {
+              sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
+            }
+            if (idToken) {
+              sessionStorage.setItem(ID_TOKEN_STORAGE_KEY, idToken);
+            }
+            window.history.replaceState({}, document.title, REDIRECT_URI);
+            setStatus("authenticated (implicit)");
+            setResult({
+              message: "login success (implicit)",
+              has_id_token: Boolean(idToken),
+              has_access_token: Boolean(accessToken),
+            });
+            return;
+          }
+
+          if (code) {
+            setStatus("exchanging code");
+            const tokenJson = await exchangeCodeForToken(code);
+            setStatus("authenticated");
+            setResult({
+              message: "login success",
+              token_type: tokenJson.token_type,
+              expires_in: tokenJson.expires_in,
+              has_id_token: Boolean(tokenJson.id_token),
+              has_access_token: Boolean(tokenJson.access_token),
+            });
+          }
+        } catch (error) {
+          setStatus("error");
+          setResult(String(error));
+        }
+      }
+
+      loginButton.addEventListener("click", () => {
+        startLogin("code").catch((error) => {
+          setStatus("error");
+          setResult(String(error));
+        });
+      });
+
+      loginFallbackButton.addEventListener("click", () => {
+        startLogin("token").catch((error) => {
+          setStatus("error");
+          setResult(String(error));
+        });
+      });
+
+      callSecretButton.addEventListener("click", () => {
+        callSecretApi().catch((error) => {
+          setStatus("error");
+          setResult(String(error));
+        });
+      });
+
+      diagnosticsButton.addEventListener("click", () => {
+        setStatus("running diagnostics");
+        runDiagnostics().catch((error) => {
+          setStatus("error");
+          setResult(errorToObject(error));
+        });
+      });
+
+      resetButton.addEventListener("click", hardResetSession);
+
+      logoutButton.addEventListener("click", logout);
+
+      initialize();
+    </script>
   </body>
 </html>

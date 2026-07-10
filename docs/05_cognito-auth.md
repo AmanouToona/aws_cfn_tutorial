@@ -233,6 +233,81 @@ curl -i "$(aws cloudformation describe-stacks \
 - リダイレクト後に `code` を受け取りトークン交換
 - アクセストークンを使って `/secret` を呼ぶ
 
+このリポジトリでは `frontend/index.html` の `CONFIG` を更新します。
+
+`CONFIG` へ設定する値:
+
+- `region`: `ap-northeast-1`
+- `clientId`: Output の `UserPoolClientId`
+- `cognitoDomainPrefix`: Output の `CognitoDomain`
+- `secretApiUrl`: `/prod/secret`（CloudFront 経由の同一オリジン呼び出し）
+
+この手順では、`frontend-dispatch` に API Gateway origin を追加して
+`/prod/*` を API 側へ転送します。これによりブラウザ CORS 依存を下げられます。
+
+`frontend/index.html` 更新後に S3 へ再配置:
+
+```bash
+aws s3 sync frontend/ "s3://$(aws cloudformation describe-stacks \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE_NAME" \
+  --stack-name "${PROJECT}-${ENV}-bootstrap" \
+  --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue | [0]" \
+  --output text)" \
+  --delete \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE_NAME"
+```
+
+CloudFront 反映待ち後の確認:
+
+```bash
+# アクセス先の url を取得
+aws cloudformation describe-stacks \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE_NAME" \
+  --stack-name "$FE_STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue | [0]" \
+  --output text
+```
+
+1. `Login with Cognito` で Hosted UI へ遷移できる
+2. ログイン後にページへ戻る
+3. `Call /secret` で `200` が返る
+
+Hosted UI の `username` は Cognito User Pool 内のユーザー名です。
+初回はユーザーが未作成なので、CLI でテストユーザーを作成します（AWS Console 不要）。
+
+```bash
+export USER_POOL_ID="$(aws cloudformation describe-stacks \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE_NAME" \
+  --stack-name "$APP_STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" \
+  --output text)"
+
+aws cognito-idp admin-create-user \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE_NAME" \
+  --user-pool-id "$USER_POOL_ID" \
+  --username testuser01 \
+  --user-attributes Name=email,Value=your-email@example.com Name=email_verified,Value=true \
+  --message-action SUPPRESS
+
+aws cognito-idp admin-set-user-password \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE_NAME" \
+  --user-pool-id "$USER_POOL_ID" \
+  --username testuser01 \
+  --password 'TmpPassw0rd!2026' \
+  --permanent
+```
+
+ログイン画面には次を入力します。
+
+- username: `testuser01`
+- password: `TmpPassw0rd!2026`
+
 確認ポイント:
 
 - ログイン後に認証 API 呼び出し結果が表示されること
@@ -246,6 +321,22 @@ curl -i "$(aws cloudformation describe-stacks \
 1. ログイン後に認証 API を呼ぶ
 
 - 期待値: 200
+
+ショートカット（CLI で一括確認）:
+
+```bash
+chmod +x infrastructure/scripts/verify_phase5_auth.sh
+AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/verify_phase5_auth.sh
+```
+
+任意のユーザーで実行する場合:
+
+```bash
+TEST_USERNAME="testuser01" \
+TEST_PASSWORD='TmpPassw0rd!2026' \
+AWS_PROFILE_NAME="$AWS_PROFILE_NAME" \
+infrastructure/scripts/verify_phase5_auth.sh
+```
 
 ## 6. 失敗時の確認
 
@@ -290,6 +381,108 @@ curl -i "$(aws cloudformation describe-stacks \
 - Domain prefix を英小文字・数字・ハイフンのみの形式にする
 - `aws` など予約語と衝突しやすい prefix を避ける
 - 一意性のため account id / region を含める
+
+### 6.5 `Call /secret` が `TypeError: Failed to fetch`
+
+症状:
+
+- ブラウザで `Call /secret` 実行時に `TypeError: Failed to fetch`
+
+対処:
+
+- API Gateway の `UNAUTHORIZED` / `ACCESS_DENIED` 応答に CORS ヘッダーを付与する
+- 追加で `DEFAULT_4XX` / `DEFAULT_5XX` にも CORS ヘッダーを付与する
+- `AWS::ApiGateway::GatewayResponse` を追加後、application スタックを再デプロイする
+- その後、ブラウザをハードリロードして再確認する
+
+まずは次を実行して、フロント再配信と CloudFront キャッシュ無効化をまとめて行ってください。
+
+```bash
+chmod +x infrastructure/scripts/refresh_frontend_phase5.sh
+AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/refresh_frontend_phase5.sh
+```
+
+`frontend/index.html` には `Run Diagnostics` ボタンを追加済みです。
+再配信後にブラウザでこれを押すと、以下が JSON で確認できます。
+
+- preflight (`OPTIONS`) の status と CORS ヘッダー
+- no auth (`GET`) の status
+- token 付き (`GET`) の status または network_error の詳細
+
+`network_error` が続く場合は、その JSON をそのまま貼ってください。
+
+追加対処（Authorization 付き preflight 失敗が疑われる場合）:
+
+```bash
+aws cloudformation deploy \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE_NAME" \
+  --stack-name "$APP_STACK" \
+  --template-file infrastructure/templates/application/template.yaml \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides \
+    EnvironmentName="$ENV" \
+    Project="$PROJECT" \
+    LambdaCodeS3Bucket="$LAMBDA_BUCKET" \
+    LambdaCodeS3Key="$LAMBDA_KEY" \
+    FrontendCallbackUrl="$FRONTEND_CALLBACK_URL" \
+    FrontendLogoutUrl="$FRONTEND_LOGOUT_URL"
+
+AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/refresh_frontend_phase5.sh
+```
+
+zsh での貼り付け崩れ対策（1 行ずつ実行）:
+
+```bash
+export AWS_REGION="${AWS_REGION:-ap-northeast-1}"
+export PROJECT="${PROJECT:-aws-cfn-tutorial}"
+export ENV="${ENV:-dev}"
+export APP_STACK="${PROJECT}-${ENV}-application"
+export FE_STACK="${PROJECT}-${ENV}-frontend-dispatch"
+
+export FRONTEND_URL=$(aws cloudformation describe-stacks --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$FE_STACK" --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue | [0]" --output text)
+export FRONTEND_CALLBACK_URL="$FRONTEND_URL"
+export FRONTEND_LOGOUT_URL="$FRONTEND_URL"
+export LAMBDA_BUCKET=$(aws cloudformation describe-stacks --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$APP_STACK" --query "Stacks[0].Parameters[?ParameterKey=='LambdaCodeS3Bucket'].ParameterValue | [0]" --output text)
+export LAMBDA_KEY=$(aws cloudformation describe-stacks --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$APP_STACK" --query "Stacks[0].Parameters[?ParameterKey=='LambdaCodeS3Key'].ParameterValue | [0]" --output text)
+
+aws cloudformation deploy --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$APP_STACK" --template-file infrastructure/templates/application/template.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides EnvironmentName="$ENV" Project="$PROJECT" LambdaCodeS3Bucket="$LAMBDA_BUCKET" LambdaCodeS3Key="$LAMBDA_KEY" FrontendCallbackUrl="$FRONTEND_CALLBACK_URL" FrontendLogoutUrl="$FRONTEND_LOGOUT_URL"
+
+AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/refresh_frontend_phase5.sh
+```
+
+この更新では `Access-Control-Allow-Headers` を拡張し、
+`frontend/index.html` は `access_token` 優先で `/secret` を呼び、失敗時に別トークンへ自動再試行します。
+
+さらに追加で、API Gateway の `EXPIRED_TOKEN` / `INVALID_SIGNATURE` /
+`AUTHORIZER_FAILURE` / `AUTHORIZER_CONFIGURATION_ERROR` にも CORS ヘッダーを付与しました。
+ブラウザで `TypeError: Failed to fetch` が出る場合の取りこぼしを減らすためです。
+
+`frontend/index.html` はログイン開始時に保存済みトークンをクリアし、
+期限切れ JWT を優先的に使わないよう更新済みです。
+
+さらに「どうせまた失敗する」前提の復旧手順として、
+`infrastructure/scripts/recover_phase5_browser.sh` を追加しました。
+このスクリプトは以下を順番に自動実行します。
+
+- application 再デプロイ
+- frontend-dispatch 再デプロイ（`/prod/*` を API Gateway へ転送）
+- CLI 認証確認（`verify_phase5_auth.sh`）
+- frontend 再配信 + CloudFront invalidation（`refresh_frontend_phase5.sh`）
+
+実行:
+
+```bash
+chmod +x infrastructure/scripts/recover_phase5_browser.sh
+AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/recover_phase5_browser.sh
+```
+
+実行後、ブラウザで次の順番を固定してください。
+
+1. `Hard Reset Session`
+2. `Login with Cognito`
+3. `Run Diagnostics`
+4. `Call /secret`
 
 ## 7. 完了条件（Definition of Done）
 

@@ -13,6 +13,12 @@ Parameters:
   FrontendWebAclArn:
     Type: String
     Default: ""
+  ApiGatewayDomainName:
+    Type: String
+    Default: ""
+
+Conditions:
+  HasApiGatewayDomainName: !Not [!Equals [!Ref ApiGatewayDomainName, ""]]
 
 Resources:
   FrontendDistribution:
@@ -24,7 +30,42 @@ Resources:
             Id: FrontendBucketOrigin
             OriginAccessControlId: !Ref FrontendOAC
             S3OriginConfig: {}
+          - !If
+            - HasApiGatewayDomainName
+            - DomainName: !Ref ApiGatewayDomainName
+              Id: ApiGatewayOrigin
+              CustomOriginConfig:
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols:
+                  - TLSv1.2
+            - !Ref AWS::NoValue
         Enabled: true
+        CacheBehaviors:
+          - !If
+            - HasApiGatewayDomainName
+            - PathPattern: prod/*
+              TargetOriginId: ApiGatewayOrigin
+              ViewerProtocolPolicy: redirect-to-https
+              AllowedMethods:
+                - GET
+                - HEAD
+                - OPTIONS
+              CachedMethods:
+                - GET
+                - HEAD
+              ForwardedValues:
+                QueryString: true
+                Headers:
+                  - Authorization
+                  - Origin
+                  - Access-Control-Request-Method
+                  - Access-Control-Request-Headers
+                Cookies:
+                  Forward: none
+              MinTTL: 0
+              DefaultTTL: 0
+              MaxTTL: 0
+            - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: FrontendBucketOrigin
           ViewerProtocolPolicy: redirect-to-https
