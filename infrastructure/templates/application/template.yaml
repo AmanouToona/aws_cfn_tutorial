@@ -34,6 +34,21 @@ Resources:
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
 
+  RateLimitTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${Project}-rate-limit-${EnvironmentName}"
+      AttributeDefinitions:
+        - AttributeName: rate_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: rate_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      BillingMode: PAY_PER_REQUEST
+
   HelloFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -47,6 +62,17 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RateLimitTableAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt RateLimitTable.Arn
 
   HelloFunction:
     Type: AWS::Lambda::Function
@@ -59,6 +85,9 @@ Resources:
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
 
   HelloApi:
     Type: AWS::ApiGateway::RestApi
@@ -306,6 +335,8 @@ Outputs:
     Value: !GetAtt HelloFunction.Arn
   HelloTableName:
     Value: !Ref HelloTable
+  RateLimitTableName:
+    Value: !Ref RateLimitTable
   UserPoolId:
     Value: !Ref CognitoUserPool
   UserPoolClientId:

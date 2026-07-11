@@ -32,8 +32,8 @@ FRONTEND_BUCKET=$(aws cloudformation describe-stacks --region "${AWS_REGION}" --
 FRONTEND_WEB_ACL_ARN=$(aws cloudformation describe-stacks --region "${AWS_REGION}" --profile "${AWS_PROFILE_NAME}" --stack-name "${FE_STACK}" --query "Stacks[0].Parameters[?ParameterKey=='FrontendWebAclArn'].ParameterValue | [0]" --output text)
 
 echo
-echo "[Step 2] Deploy application template"
-aws cloudformation deploy --region "${AWS_REGION}" --profile "${AWS_PROFILE_NAME}" --stack-name "${APP_STACK}" --template-file infrastructure/templates/application/template.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides EnvironmentName="${ENV}" Project="${PROJECT}" LambdaCodeS3Bucket="${LAMBDA_BUCKET}" LambdaCodeS3Key="${LAMBDA_KEY}" FrontendCallbackUrl="${FRONTEND_CALLBACK_URL}" FrontendLogoutUrl="${FRONTEND_LOGOUT_URL}"
+echo "[Step 2] Upload Lambda artifact and deploy application stack"
+infrastructure/scripts/deploy_application.sh
 
 API_GATEWAY_DOMAIN_NAME=$(aws cloudformation describe-stacks --region "${AWS_REGION}" --profile "${AWS_PROFILE_NAME}" --stack-name "${APP_STACK}" --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayDomainName'].OutputValue | [0]" --output text)
 if [[ -z "${API_GATEWAY_DOMAIN_NAME}" || "${API_GATEWAY_DOMAIN_NAME}" == "None" ]]; then

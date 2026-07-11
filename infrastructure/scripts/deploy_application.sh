@@ -13,6 +13,7 @@ ENV="${ENV:-dev}"
 
 BOOTSTRAP_STACK="${PROJECT}-${ENV}-bootstrap"
 APP_STACK="${PROJECT}-${ENV}-application"
+FE_STACK="${PROJECT}-${ENV}-frontend-dispatch"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -42,7 +43,20 @@ cleanup() {
 trap cleanup EXIT
 
 ZIP_PATH="${TMP_DIR}/hello-function.zip"
-S3_KEY="lambda/hello/${ENV}/hello-function.zip"
+ARTIFACT_VERSION="$(date -u +%Y%m%d%H%M%S)"
+S3_KEY="lambda/hello/${ENV}/hello-function-${ARTIFACT_VERSION}.zip"
+
+FRONTEND_URL="$(aws cloudformation describe-stacks \
+  --region "${AWS_REGION}" \
+  --profile "${AWS_PROFILE_NAME}" \
+  --stack-name "${FE_STACK}" \
+  --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue | [0]" \
+  --output text)"
+
+if [[ -z "${FRONTEND_URL}" || "${FRONTEND_URL}" == "None" ]]; then
+  echo "ERROR: FrontendURL output not found in stack ${FE_STACK}."
+  exit 1
+fi
 
 (
   cd "${LAMBDA_DIR}"
@@ -70,7 +84,9 @@ aws cloudformation deploy \
     EnvironmentName="${ENV}" \
     Project="${PROJECT}" \
     LambdaCodeS3Bucket="${ARTIFACT_BUCKET}" \
-    LambdaCodeS3Key="${S3_KEY}"
+    LambdaCodeS3Key="${S3_KEY}" \
+    FrontendCallbackUrl="${FRONTEND_URL}" \
+    FrontendLogoutUrl="${FRONTEND_URL}"
 
 HELLO_API_URL="$(aws cloudformation describe-stacks \
   --region "${AWS_REGION}" \

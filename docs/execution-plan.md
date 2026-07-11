@@ -116,6 +116,10 @@
 
 - API の利用制御を体験する
 
+詳細手順:
+
+- `docs/06_rate-limiting.md` を参照
+
 ### Phase 7: CI/CD を整える
 
 1. GitHub Actions を作る
@@ -233,3 +237,9 @@
 補足:
 
 - 具体的な CLI コマンドは `deploy-and-destroy-process.md` にまとめる
+
+## 9. 運用メモ（次回追加予定）
+
+- Lambda アーティファクトはユニークキー運用を継続する
+- その代わり、bootstrap の Artifact バケットに S3 Lifecycle ルールを追加する
+- 追加タイミングは次の実装着手時とし、古いアーティファクトの自動削除（例: 30-90 日）を設定する
