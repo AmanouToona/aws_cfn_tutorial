@@ -395,74 +395,12 @@ infrastructure/scripts/verify_phase5_auth.sh
 - `AWS::ApiGateway::GatewayResponse` を追加後、application スタックを再デプロイする
 - その後、ブラウザをハードリロードして再確認する
 
-まずは次を実行して、フロント再配信と CloudFront キャッシュ無効化をまとめて行ってください。
+最短対処（この 1 コマンドだけ実行）:
 
 ```bash
-chmod +x infrastructure/scripts/refresh_frontend_phase5.sh
-AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/refresh_frontend_phase5.sh
+AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/recover_phase5_browser.sh
 ```
 
-`frontend/index.html` には `Run Diagnostics` ボタンを追加済みです。
-再配信後にブラウザでこれを押すと、以下が JSON で確認できます。
-
-- preflight (`OPTIONS`) の status と CORS ヘッダー
-- no auth (`GET`) の status
-- token 付き (`GET`) の status または network_error の詳細
-
-`network_error` が続く場合は、その JSON をそのまま貼ってください。
-
-追加対処（Authorization 付き preflight 失敗が疑われる場合）:
-
-```bash
-aws cloudformation deploy \
-  --region "$AWS_REGION" \
-  --profile "$AWS_PROFILE_NAME" \
-  --stack-name "$APP_STACK" \
-  --template-file infrastructure/templates/application/template.yaml \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides \
-    EnvironmentName="$ENV" \
-    Project="$PROJECT" \
-    LambdaCodeS3Bucket="$LAMBDA_BUCKET" \
-    LambdaCodeS3Key="$LAMBDA_KEY" \
-    FrontendCallbackUrl="$FRONTEND_CALLBACK_URL" \
-    FrontendLogoutUrl="$FRONTEND_LOGOUT_URL"
-
-AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/refresh_frontend_phase5.sh
-```
-
-zsh での貼り付け崩れ対策（1 行ずつ実行）:
-
-```bash
-export AWS_REGION="${AWS_REGION:-ap-northeast-1}"
-export PROJECT="${PROJECT:-aws-cfn-tutorial}"
-export ENV="${ENV:-dev}"
-export APP_STACK="${PROJECT}-${ENV}-application"
-export FE_STACK="${PROJECT}-${ENV}-frontend-dispatch"
-
-export FRONTEND_URL=$(aws cloudformation describe-stacks --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$FE_STACK" --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue | [0]" --output text)
-export FRONTEND_CALLBACK_URL="$FRONTEND_URL"
-export FRONTEND_LOGOUT_URL="$FRONTEND_URL"
-export LAMBDA_BUCKET=$(aws cloudformation describe-stacks --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$APP_STACK" --query "Stacks[0].Parameters[?ParameterKey=='LambdaCodeS3Bucket'].ParameterValue | [0]" --output text)
-export LAMBDA_KEY=$(aws cloudformation describe-stacks --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$APP_STACK" --query "Stacks[0].Parameters[?ParameterKey=='LambdaCodeS3Key'].ParameterValue | [0]" --output text)
-
-aws cloudformation deploy --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME" --stack-name "$APP_STACK" --template-file infrastructure/templates/application/template.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides EnvironmentName="$ENV" Project="$PROJECT" LambdaCodeS3Bucket="$LAMBDA_BUCKET" LambdaCodeS3Key="$LAMBDA_KEY" FrontendCallbackUrl="$FRONTEND_CALLBACK_URL" FrontendLogoutUrl="$FRONTEND_LOGOUT_URL"
-
-AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/refresh_frontend_phase5.sh
-```
-
-この更新では `Access-Control-Allow-Headers` を拡張し、
-`frontend/index.html` は `access_token` 優先で `/secret` を呼び、失敗時に別トークンへ自動再試行します。
-
-さらに追加で、API Gateway の `EXPIRED_TOKEN` / `INVALID_SIGNATURE` /
-`AUTHORIZER_FAILURE` / `AUTHORIZER_CONFIGURATION_ERROR` にも CORS ヘッダーを付与しました。
-ブラウザで `TypeError: Failed to fetch` が出る場合の取りこぼしを減らすためです。
-
-`frontend/index.html` はログイン開始時に保存済みトークンをクリアし、
-期限切れ JWT を優先的に使わないよう更新済みです。
-
-さらに「どうせまた失敗する」前提の復旧手順として、
-`infrastructure/scripts/recover_phase5_browser.sh` を追加しました。
 このスクリプトは以下を順番に自動実行します。
 
 - application 再デプロイ
@@ -470,19 +408,37 @@ AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/refresh_frontend_pha
 - CLI 認証確認（`verify_phase5_auth.sh`）
 - frontend 再配信 + CloudFront invalidation（`refresh_frontend_phase5.sh`）
 
-実行:
-
-```bash
-chmod +x infrastructure/scripts/recover_phase5_browser.sh
-AWS_PROFILE_NAME="$AWS_PROFILE_NAME" infrastructure/scripts/recover_phase5_browser.sh
-```
-
-実行後、ブラウザで次の順番を固定してください。
+ブラウザの確認手順（固定）:
 
 1. `Hard Reset Session`
 2. `Login with Cognito`
-3. `Run Diagnostics`
-4. `Call /secret`
+3. `Call /secret`
+
+### 6.6 Stack の情報が古いままに見える理由
+
+CloudFormation は更新していても、次の理由で「古い設定のまま」に見えることがあります。
+
+1. API Gateway Deployment はスナップショット方式
+
+- Method や Integration を変えても、Stage が新しい Deployment を向いていなければ旧設定が残ります。
+
+1. CloudFront キャッシュ
+
+- `index.html` や静的ファイルがエッジに残るため、S3 更新後も旧フロントが配信されます。
+- invalidation しないと「ローカルは新しいが配信は古い」状態になります。
+
+1. ブラウザキャッシュ / セッション
+
+- 旧トークン（期限切れ・別フロー）や古い JS が残ると、API は正しくてもブラウザだけ失敗します。
+
+1. CloudFormation の no-op / rollback
+
+- 実質差分がない更新はリソースが置き換わらず、期待する反映が起きません。
+- 失敗後の rollback でテンプレートだけ新しく見えて、実体は旧状態のままになることがあります。
+
+1. 反映の時間差（eventual consistency）
+
+- Cognito や API Gateway の変更が全体へ反映されるまで、短時間のズレが発生します。
 
 ## 7. 完了条件（Definition of Done）
 
