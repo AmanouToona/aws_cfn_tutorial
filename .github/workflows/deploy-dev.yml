@@ -1,0 +1,165 @@
+name: Deploy Dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - backend/**
+      - frontend/**
+      - infrastructure/templates/**
+      - infrastructure/scripts/**
+      - .github/workflows/deploy-dev.yml
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+  AWS_WAF_REGION: us-east-1
+  PROJECT: aws-cfn-tutorial
+  ENV: dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build and upload Lambda artifact
+        run: |
+          set -euo pipefail
+
+          BOOTSTRAP_STACK="${PROJECT}-${ENV}-bootstrap"
+
+          ARTIFACT_BUCKET="$(aws cloudformation describe-stacks \
+            --region "${AWS_REGION}" \
+            --stack-name "${BOOTSTRAP_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ArtifactBucketName'].OutputValue | [0]" \
+            --output text)"
+
+          if [[ -z "${ARTIFACT_BUCKET}" || "${ARTIFACT_BUCKET}" == "None" ]]; then
+            echo "Artifact bucket output is missing from ${BOOTSTRAP_STACK}" >&2
+            exit 1
+          fi
+
+          ARTIFACT_VERSION="$(date -u +%Y%m%d%H%M%S)"
+          S3_KEY="lambda/hello/${ENV}/hello-function-${ARTIFACT_VERSION}.zip"
+
+          (cd backend/functions/hello && zip -q /tmp/hello-function.zip app.py)
+
+          aws s3 cp /tmp/hello-function.zip "s3://${ARTIFACT_BUCKET}/${S3_KEY}" \
+            --region "${AWS_REGION}"
+
+          echo "LAMBDA_S3_BUCKET=${ARTIFACT_BUCKET}" >> "${GITHUB_ENV}"
+          echo "LAMBDA_S3_KEY=${S3_KEY}" >> "${GITHUB_ENV}"
+
+      - name: Deploy application stack
+        run: |
+          set -euo pipefail
+
+          APP_STACK="${PROJECT}-${ENV}-application"
+          FE_STACK="${PROJECT}-${ENV}-frontend-dispatch"
+
+          FRONTEND_URL="$(aws cloudformation describe-stacks \
+            --region "${AWS_REGION}" \
+            --stack-name "${FE_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue | [0]" \
+            --output text)"
+
+          if [[ -z "${FRONTEND_URL}" || "${FRONTEND_URL}" == "None" ]]; then
+            echo "FrontendURL output is missing from ${FE_STACK}" >&2
+            exit 1
+          fi
+
+          aws cloudformation validate-template \
+            --template-body file://infrastructure/templates/application/template.yaml
+
+          aws cloudformation deploy \
+            --region "${AWS_REGION}" \
+            --stack-name "${APP_STACK}" \
+            --template-file infrastructure/templates/application/template.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              EnvironmentName="${ENV}" \
+              Project="${PROJECT}" \
+              LambdaCodeS3Bucket="${LAMBDA_S3_BUCKET}" \
+              LambdaCodeS3Key="${LAMBDA_S3_KEY}" \
+              FrontendCallbackUrl="${FRONTEND_URL}" \
+              FrontendLogoutUrl="${FRONTEND_URL}"
+
+      - name: Deploy frontend-dispatch stack
+        run: |
+          set -euo pipefail
+
+          BOOTSTRAP_STACK="${PROJECT}-${ENV}-bootstrap"
+          WAF_STACK="${PROJECT}-${ENV}-waf"
+          APP_STACK="${PROJECT}-${ENV}-application"
+          FE_STACK="${PROJECT}-${ENV}-frontend-dispatch"
+
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --region "${AWS_REGION}" \
+            --stack-name "${BOOTSTRAP_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue | [0]" \
+            --output text)"
+
+          FRONTEND_WEB_ACL_ARN="$(aws cloudformation describe-stacks \
+            --region "${AWS_WAF_REGION}" \
+            --stack-name "${WAF_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendWebAclArn'].OutputValue | [0]" \
+            --output text)"
+
+          API_GATEWAY_DOMAIN_NAME="$(aws cloudformation describe-stacks \
+            --region "${AWS_REGION}" \
+            --stack-name "${APP_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayDomainName'].OutputValue | [0]" \
+            --output text)"
+
+          aws cloudformation deploy \
+            --region "${AWS_REGION}" \
+            --stack-name "${FE_STACK}" \
+            --template-file infrastructure/templates/frontend-dispatch/template.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              EnvironmentName="${ENV}" \
+              Project="${PROJECT}" \
+              FrontendBucketName="${FRONTEND_BUCKET}" \
+              FrontendWebAclArn="${FRONTEND_WEB_ACL_ARN}" \
+              ApiGatewayDomainName="${API_GATEWAY_DOMAIN_NAME}"
+
+      - name: Upload frontend and invalidate CloudFront cache
+        run: |
+          set -euo pipefail
+
+          BOOTSTRAP_STACK="${PROJECT}-${ENV}-bootstrap"
+          FE_STACK="${PROJECT}-${ENV}-frontend-dispatch"
+
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --region "${AWS_REGION}" \
+            --stack-name "${BOOTSTRAP_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue | [0]" \
+            --output text)"
+
+          DIST_ID="$(aws cloudformation list-stack-resources \
+            --region "${AWS_REGION}" \
+            --stack-name "${FE_STACK}" \
+            --query "StackResourceSummaries[?LogicalResourceId=='FrontendDistribution'].PhysicalResourceId | [0]" \
+            --output text)"
+
+          aws s3 sync frontend/ "s3://${FRONTEND_BUCKET}" \
+            --delete \
+            --region "${AWS_REGION}"
+
+          aws cloudfront create-invalidation \
+            --distribution-id "${DIST_ID}" \
+            --paths "/*"
