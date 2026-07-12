@@ -131,6 +131,10 @@
 
 - 手作業を減らし、再現性を高める
 
+詳細手順:
+
+- `docs/07_cicd-github-actions.md` を参照
+
 ### Phase 8: 監視と運用
 
 1. CloudWatch Logs を確認できるようにする

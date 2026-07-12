@@ -16,6 +16,8 @@ Parameters:
   ApiGatewayDomainName:
     Type: String
     Default: ""
+  CloudFrontLogBucketName:
+    Type: String
 
 Conditions:
   HasApiGatewayDomainName: !Not [!Equals [!Ref ApiGatewayDomainName, ""]]
@@ -81,6 +83,11 @@ Resources:
               Forward: none
         DefaultRootObject: index.html
         WebACLId: !Ref FrontendWebAclArn
+        Logging:
+          Bucket: !Sub "${CloudFrontLogBucketName}.s3.amazonaws.com"
+          IncludeCookies: false
+          Prefix: !Sub "${Project}-frontend-dispatch/${EnvironmentName}/"
+
   FrontendOAC:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:

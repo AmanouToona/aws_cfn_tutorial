@@ -24,6 +24,15 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
+  CloudFrontLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Project}-cf-logs-${EnvironmentName}-${AWS::AccountId}"
+      AccessControl: LogDeliveryWrite
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+
   CfnExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -62,3 +71,6 @@ Outputs:
   CfnExecutionRoleArn:
     Description: ARN of the CloudFormation Execution Role
     Value: !GetAtt CfnExecutionRole.Arn
+  CloudFrontLogBucketName:
+    Description: S3 bucket name for CloudFront logs
+    Value: !Ref CloudFrontLogBucket
