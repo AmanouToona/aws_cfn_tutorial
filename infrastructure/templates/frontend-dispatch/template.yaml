@@ -117,3 +117,6 @@ Outputs:
   FrontendURL:
     Description: URL of the CloudFront distribution for the frontend
     Value: !Sub "https://${FrontendDistribution.DomainName}"
+  CloudFrontDistributionId:
+    Description: ID of the CloudFront distribution for the frontend
+    Value: !Ref FrontendDistribution

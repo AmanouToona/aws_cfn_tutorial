@@ -151,6 +151,10 @@
 6. 残存 S3 オブジェクトと CloudWatch ロググループを確認し、残っていれば削除する
 7. `aws cloudformation list-stacks` で関連スタックが `DELETE_COMPLETE` になっていることを確認する
 
+詳細手順:
+
+- `docs/09_full-teardown.md` を参照
+
 目的:
 
 - 課金リスクを残さずに、学習環境を安全に閉じる
